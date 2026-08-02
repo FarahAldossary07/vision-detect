@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vision Detect — Object & Face Detection</title>
+  <meta name="description" content="Real-time object and face detection in the browser. Detects phones, keyboards, mice, bottles, faces and more." />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔎</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">🔎</span>
+      <div>
+        <h1>Vision Detect</h1>
+        <p class="tagline">In-browser object &amp; face detection</p>
+      </div>
+    </div>
+    <div id="model-status" class="model-status loading">
+      <span class="dot"></span><span id="model-status-text">Loading models…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="stage-panel">
+      <div class="mode-tabs" role="tablist">
+        <button id="tab-webcam" class="tab active" role="tab" aria-selected="true">📷 Webcam</button>
+        <button id="tab-upload" class="tab" role="tab" aria-selected="false">🖼️ Upload image</button>
+      </div>
+
+      <div class="stage" id="stage">
+        <div id="placeholder" class="placeholder">
+          <p id="placeholder-text">Models are loading — this takes a few seconds on first visit…</p>
+          <button id="start-webcam-btn" class="primary-btn" disabled>Start webcam</button>
+          <label id="upload-label" class="primary-btn ghost hidden" for="file-input">Choose an image</label>
+          <input type="file" id="file-input" accept="image/*" hidden />
+        </div>
+        <video id="video" playsinline muted class="hidden"></video>
+        <canvas id="canvas" class="hidden"></canvas>
+        <div id="drop-hint" class="drop-hint hidden">Drop image to analyze</div>
+      </div>
+
+      <div class="controls">
+        <label class="slider-label">
+          Confidence threshold <span id="conf-value">50%</span>
+          <input type="range" id="conf-slider" min="10" max="90" value="50" />
+        </label>
+        <label class="toggle-label">
+          <input type="checkbox" id="face-toggle" checked /> Detect faces
+        </label>
+        <button id="stop-btn" class="secondary-btn hidden">Stop webcam</button>
+      </div>
+    </section>
+
+    <aside class="results-panel">
+      <div class="results-header">
+        <h2>Detections</h2>
+        <button id="export-btn" class="secondary-btn" disabled>Export JSON</button>
+      </div>
+      <div id="summary" class="summary">
+        <p class="muted">No detections yet. Start the webcam or upload an image.</p>
+      </div>
+      <ul id="detections-list" class="detections-list"></ul>
+      <div class="panel-footer">
+        <details>
+          <summary>What can it detect?</summary>
+          <p>Faces (via MediaPipe) plus the 80 COCO object classes, including:
+            <em>cell phone, mouse, keyboard, laptop, bottle, cup, book, scissors,
+            remote, tv, clock, backpack, chair, person</em> and more.
+            Custom items (e.g. pens or specific products/brands) require a
+            custom-trained model — planned as a future phase.</p>
+        </details>
+        <p class="muted small">All processing happens locally in your browser. No images are uploaded to any server.</p>
+      </div>
+    </aside>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
