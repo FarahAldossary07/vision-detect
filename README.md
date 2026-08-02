@@ -1,69 +1,63 @@
-# Vision Detect — In-Browser Object & Face Detection
+# Vision Detect — Capture, Detect & Label
 
-A lightweight computer-vision web app that detects everyday objects (phones, keyboards, mice, bottles, laptops, cups, and more) and faces — entirely in the browser. No backend, no image uploads: all inference runs client-side.
+A browser-based computer-vision tool: **capture photos from your webcam**, let a pretrained model suggest detections, then **correct labels or draw your own boxes** for items the model doesn't know (a yoghurt box, a pen, a specific product) — and build up a labeled **training dataset**, all client-side. No backend, no uploads.
 
-## Features
+**Live app:** https://vision-detect-theta.vercel.app
 
-- **Live webcam detection** — real-time bounding boxes over the camera feed
-- **Image upload** — drag & drop or pick an image for one-shot analysis
-- **Face detection** — dedicated face detector (MediaPipe BlazeFace), toggleable
-- **Adjustable confidence threshold** — filter detections interactively
-- **Structured output** — per-class counts and a one-click **Export JSON** with labels, confidences, and bounding boxes
-- **Privacy-friendly** — images never leave the device
+## Workflow
 
-## Detectable classes
+1. **📷 Camera** → Start camera → live detections overlay the feed → **📸 Capture**
+2. The captured photo opens in **labeling mode**, pre-seeded with the model's suggestions
+3. Fix anything:
+   - **Rename** a suggested label (e.g. `bottle` → `yoghurt drink`)
+   - **Delete** wrong boxes (✕)
+   - **Drag on the image** to draw a new box for anything the model missed, and type any label you want
+4. **💾 Save to dataset** — stored locally in your browser (IndexedDB)
+5. Repeat. When you have enough samples, **⬇️ Export ZIP (YOLO)**
 
-Faces, plus the **80 COCO classes** from the object model, including:
+The 🖼️ Upload tab does the same for existing image files.
 
-`cell phone, mouse, keyboard, laptop, bottle, cup, book, scissors, remote, tv, clock, backpack, chair, person, …`
+## Export formats
 
-> **Note:** items outside the COCO vocabulary (e.g. *pen*, or specific products/brands/SKUs) are not detected by the pretrained model. Supporting them requires a custom-trained detector — planned as a future phase (see roadmap).
+- **Per-image JSON** — labels, confidences, bounding boxes, per-class counts
+- **Dataset ZIP** — ready for custom model training:
+  ```
+  images/img_0001.jpg      ← captured photos
+  labels/img_0001.txt      ← YOLO format (class cx cy w h, normalized)
+  classes.txt              ← class index → name
+  dataset.json             ← full metadata (COCO-style manifest)
+  ```
+
+## What the pretrained model suggests
+
+Faces (MediaPipe BlazeFace) plus the **80 COCO classes** (cell phone, mouse, keyboard, laptop, bottle, cup, book, scissors, person, …). Anything outside that vocabulary is labeled manually — that's the point: the exported dataset is exactly what's needed to **train a custom detector** (e.g. YOLOv8 fine-tune) that recognizes your specific items directly. That training step is the natural next phase of this project.
 
 ## Tech stack
 
 | Layer | Choice |
 |---|---|
-| Object detection | TensorFlow.js + COCO-SSD (runs in-browser, WebGL-accelerated) |
-| Face detection | MediaPipe Tasks Vision (BlazeFace short-range) |
+| Object detection | TensorFlow.js + COCO-SSD (in-browser, WebGL) |
+| Face detection | MediaPipe Tasks Vision (BlazeFace) |
+| Labeling & dataset | Canvas pointer interactions + IndexedDB + JSZip |
 | Frontend | Vanilla HTML/CSS/JS — zero build step |
 | Hosting | Vercel (static) |
 
 ## Run locally
 
-Any static file server works:
-
 ```bash
 npx serve .
 ```
 
-Then open the printed URL. (Opening `index.html` directly via `file://` also works in most browsers, but webcam access requires `http(s)://` or `localhost`.)
+Webcam access requires `http://localhost` or `https://`.
 
 ## Deploy
-
-The site is pure static files — deploy the folder to any static host:
 
 ```bash
 vercel --prod
 ```
 
-## Roadmap (future phases)
+## Roadmap
 
-- Custom-trained model for out-of-vocabulary items (pens, specific products/brands)
-- Batch processing of image datasets with aggregate reports
-- Server-side API (FastAPI + YOLO) for higher accuracy and automation
-- Video file analysis and per-frame analytics
-
-## JSON output format
-
-```json
-{
-  "source": "photo.jpg",
-  "image_size": { "width": 1280, "height": 960 },
-  "confidence_threshold": 0.5,
-  "total_detections": 3,
-  "counts_by_class": { "cell phone": 1, "keyboard": 1, "face": 1 },
-  "detections": [
-    { "label": "cell phone", "confidence": 0.91, "bbox_xywh": [412, 220, 180, 340] }
-  ]
-}
-```
+- Train a custom YOLO model from exported datasets (pens, yoghurt boxes, any product)
+- Batch processing and aggregate reports
+- Optional server-side API for automation
