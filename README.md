@@ -28,6 +28,17 @@ The 🖼️ Upload tab does the same for existing image files.
   dataset.json             ← full metadata (COCO-style manifest)
   ```
 
+## Focusing on the classes you care about
+
+The pretrained model knows 80 generic classes, and most of them are noise for a product-detection project. Two controls (in **🎛 Class filter**, remembered per device):
+
+- **Ignore list** — classes never to show, e.g. `chair, dining table, tv`. Fastest way: click the **🚫** next to any live detection to silence that class instantly.
+- **Focus list** — if set, *only* these classes appear, e.g. `bottle, cup, spoon`.
+
+Faces and hands have their own toggles and ignore these lists. Your own manual and deep-scan boxes are never filtered away.
+
+**Quick labels** let you define your project's classes once (default: `cigarette pack, cracker box, glasses, yoghurt, pen`) and then apply them to a drawn box with one click instead of typing — the main time sink when labeling a few hundred images.
+
 ## Detection features
 
 **Auto-detected, live and on captures:**

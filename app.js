@@ -49,6 +49,13 @@ const els = {
   deepscanRow: document.getElementById("deepscan-row"),
   deepscanClasses: document.getElementById("deepscan-classes"),
   deepscanBtn: document.getElementById("deepscan-btn"),
+  filterBadge: document.getElementById("filter-badge"),
+  focusInput: document.getElementById("focus-input"),
+  muteInput: document.getElementById("mute-input"),
+  mutedChips: document.getElementById("muted-chips"),
+  quickLabels: document.getElementById("quick-labels"),
+  quickLabelButtons: document.getElementById("quick-label-buttons"),
+  editClassesBtn: document.getElementById("edit-classes-btn"),
   stopBtn: document.getElementById("stop-btn"),
   reviewHint: document.getElementById("review-hint"),
   resultsTitle: document.getElementById("results-title"),
@@ -85,6 +92,144 @@ const state = {
 
 function threshold() {
   return Number(els.confSlider.value) / 100;
+}
+
+// ---------- Class filtering & project classes ----------
+
+const PREFS_KEY = "vision-detect-prefs";
+const DEFAULT_PROJECT_CLASSES = [
+  "cigarette pack",
+  "cracker box",
+  "glasses",
+  "yoghurt",
+  "pen",
+];
+
+const prefs = {
+  muted: new Set(),
+  focus: [],
+  projectClasses: [...DEFAULT_PROJECT_CLASSES],
+};
+
+function parseList(text) {
+  return [
+    ...new Set(
+      text
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function loadPrefs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
+    prefs.muted = new Set(raw.muted ?? []);
+    prefs.focus = raw.focus ?? [];
+    prefs.projectClasses = raw.projectClasses ?? [...DEFAULT_PROJECT_CLASSES];
+  } catch {
+    // Corrupt or unavailable storage — fall back to defaults.
+  }
+  els.muteInput.value = [...prefs.muted].join(", ");
+  els.focusInput.value = prefs.focus.join(", ");
+  renderMutedChips();
+  renderFilterBadge();
+  renderQuickLabels();
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(
+      PREFS_KEY,
+      JSON.stringify({
+        muted: [...prefs.muted],
+        focus: prefs.focus,
+        projectClasses: prefs.projectClasses,
+      })
+    );
+  } catch {
+    // Storage full or blocked; filters still apply for this session.
+  }
+}
+
+// Faces and hands have their own toggles, so class filters leave them alone.
+function passesFilter(label, type) {
+  if (type === "face") return true;
+  const l = (label ?? "").toLowerCase();
+  if (prefs.muted.has(l)) return false;
+  if (prefs.focus.length && !prefs.focus.includes(l)) return false;
+  return true;
+}
+
+function renderFilterBadge() {
+  const parts = [];
+  if (prefs.focus.length) parts.push(`focus ${prefs.focus.length}`);
+  if (prefs.muted.size) parts.push(`muted ${prefs.muted.size}`);
+  els.filterBadge.textContent = parts.join(" · ");
+  els.filterBadge.classList.toggle("hidden", parts.length === 0);
+}
+
+function renderMutedChips() {
+  els.mutedChips.innerHTML = "";
+  [...prefs.muted].sort().forEach((label) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = `🚫 ${label} ✕`;
+    chip.title = "Click to un-mute";
+    chip.addEventListener("click", () => {
+      prefs.muted.delete(label);
+      els.muteInput.value = [...prefs.muted].join(", ");
+      savePrefs();
+      renderMutedChips();
+      renderFilterBadge();
+      if (state.review) reapplyReviewFilter();
+    });
+    els.mutedChips.appendChild(chip);
+  });
+}
+
+function muteClass(label) {
+  prefs.muted.add(label.toLowerCase());
+  els.muteInput.value = [...prefs.muted].join(", ");
+  savePrefs();
+  renderMutedChips();
+  renderFilterBadge();
+  if (state.review) reapplyReviewFilter();
+}
+
+function reapplyReviewFilter() {
+  const r = state.review;
+  if (!r) return;
+  // Manual and deep-scan boxes are the user's own work; never auto-remove them.
+  r.annotations = r.annotations.filter(
+    (a) => a.type === "manual" || a.type === "deepscan" || passesFilter(a.label, a.type)
+  );
+  r.selected = -1;
+  renderReview();
+}
+
+function renderQuickLabels() {
+  els.quickLabelButtons.innerHTML = "";
+  prefs.projectClasses.forEach((label) => {
+    const btn = document.createElement("button");
+    btn.textContent = label;
+    btn.title = `Label the selected box as "${label}"`;
+    btn.addEventListener("click", () => applyQuickLabel(label));
+    els.quickLabelButtons.appendChild(btn);
+  });
+}
+
+function applyQuickLabel(label) {
+  const r = state.review;
+  if (!r) return;
+  if (r.selected < 0 || !r.annotations[r.selected]) {
+    // Nothing selected — apply to the most recently added box.
+    if (!r.annotations.length) return;
+    r.selected = r.annotations.length - 1;
+  }
+  r.annotations[r.selected].label = label;
+  renderReview();
 }
 
 function setStatus(kind, text) {
@@ -355,7 +500,10 @@ function drawBoxes(detections, selectedIdx = -1) {
 function visibleLive() {
   const t = threshold();
   return state.liveDetections.filter(
-    (d) => d.score >= t && (els.faceToggle.checked || d.type !== "face")
+    (d) =>
+      d.score >= t &&
+      (els.faceToggle.checked || d.type !== "face") &&
+      passesFilter(d.label, d.type)
   );
 }
 
@@ -439,16 +587,40 @@ function renderLivePanel(detections) {
     return;
   }
   renderChips(detections);
-  els.list.innerHTML = detections
+  els.list.innerHTML = "";
+  detections
     .slice()
     .sort((a, b) => b.score - a.score)
-    .map(
-      (d) => `<li>
-        <span class="label" style="color:${colorFor(d.label)}">● ${d.label}</span>
-        <span class="score">${(d.score * 100).toFixed(1)}%</span>
-      </li>`
-    )
-    .join("");
+    .forEach((d) => {
+      const li = document.createElement("li");
+
+      const label = document.createElement("span");
+      label.className = "label";
+      label.style.color = colorFor(d.label);
+      label.textContent = `● ${d.label}`;
+
+      const score = document.createElement("span");
+      score.className = "score";
+      score.textContent = `${(d.score * 100).toFixed(1)}%`;
+
+      const right = document.createElement("span");
+      right.style.display = "flex";
+      right.style.alignItems = "center";
+      right.style.gap = "0.4rem";
+      right.appendChild(score);
+
+      if (d.type !== "face") {
+        const mute = document.createElement("button");
+        mute.className = "mute-btn";
+        mute.textContent = "🚫";
+        mute.title = `Stop detecting "${d.label}"`;
+        mute.addEventListener("click", () => muteClass(d.label));
+        right.appendChild(mute);
+      }
+
+      li.append(label, right);
+      els.list.appendChild(li);
+    });
 }
 
 function renderChips(detections) {
@@ -489,6 +661,7 @@ async function enterReview(imageSource, sourceName) {
   els.canvas.classList.add("labeling");
   els.reviewActions.classList.remove("hidden");
   els.deepscanRow.classList.remove("hidden");
+  els.quickLabels.classList.remove("hidden");
   els.reviewHint.classList.remove("hidden");
   els.resultsTitle.textContent = "Labels";
   ctx.drawImage(imageSource, 0, 0);
@@ -511,7 +684,9 @@ async function enterReview(imageSource, sourceName) {
       els.handToggle.checked ? detectHandsImage(imageSource) : Promise.resolve([]),
     ]);
     const t = threshold();
-    state.review.annotations = [...objects, ...faces].filter((d) => d.score >= t);
+    state.review.annotations = [...objects, ...faces].filter(
+      (d) => d.score >= t && passesFilter(d.label, d.type)
+    );
     state.review.hands = hands;
   } catch (err) {
     console.error("Detection error:", err);
@@ -525,6 +700,7 @@ function exitReview() {
   els.canvas.classList.remove("labeling");
   els.reviewActions.classList.add("hidden");
   els.deepscanRow.classList.add("hidden");
+  els.quickLabels.classList.add("hidden");
   els.reviewHint.classList.add("hidden");
   els.handAnalysis.classList.add("hidden");
   els.resultsTitle.textContent = "Detections";
@@ -1060,6 +1236,30 @@ els.saveBtn.addEventListener("click", saveToDataset);
 els.retakeBtn.addEventListener("click", retake);
 els.exportDatasetBtn.addEventListener("click", exportDatasetZip);
 els.deepscanBtn.addEventListener("click", deepScan);
+
+els.muteInput.addEventListener("change", () => {
+  prefs.muted = new Set(parseList(els.muteInput.value));
+  savePrefs();
+  renderMutedChips();
+  renderFilterBadge();
+  if (state.review) reapplyReviewFilter();
+});
+els.focusInput.addEventListener("change", () => {
+  prefs.focus = parseList(els.focusInput.value);
+  savePrefs();
+  renderFilterBadge();
+  if (state.review) reapplyReviewFilter();
+});
+els.editClassesBtn.addEventListener("click", () => {
+  const next = prompt(
+    "Your project classes (comma-separated) — these become one-click labels:",
+    prefs.projectClasses.join(", ")
+  );
+  if (next === null) return;
+  prefs.projectClasses = parseList(next);
+  savePrefs();
+  renderQuickLabels();
+});
 els.handToggle.addEventListener("change", () => {
   if (state.review) renderReview();
   else els.handAnalysis.classList.add("hidden");
@@ -1098,11 +1298,13 @@ els.confSlider.addEventListener("input", () => {
 // Debug/automation hooks (harmless in production).
 window.__visionDetect = {
   state,
+  prefs,
   enterReviewFromFile: handleFile,
   dbGetAll,
   refreshDatasetStats,
 };
 
+loadPrefs();
 setMode("camera");
 loadModels();
 refreshDatasetStats();

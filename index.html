@@ -57,6 +57,22 @@
         <button id="stop-btn" class="secondary-btn hidden">Stop camera</button>
         <span id="review-hint" class="muted small hidden">✏️ Drag on the image to draw a new box · click a box to select it</span>
       </div>
+
+      <details class="filter-panel" id="filter-panel">
+        <summary>🎛 Class filter <span id="filter-badge" class="filter-badge hidden"></span></summary>
+        <div class="filter-body">
+          <label class="field">
+            <span>Focus only on these (leave empty for all)</span>
+            <input type="text" id="focus-input" placeholder="e.g. bottle, cup, spoon" />
+          </label>
+          <label class="field">
+            <span>Ignore these classes</span>
+            <input type="text" id="mute-input" placeholder="e.g. chair, dining table, tv" />
+          </label>
+          <div id="muted-chips" class="muted-chips"></div>
+          <p class="muted small">Tip: click 🚫 next to any live detection to silence that class instantly. Settings are remembered on this device.</p>
+        </div>
+      </details>
     </section>
 
     <aside class="results-panel">
@@ -71,13 +87,21 @@
       </div>
 
       <div id="deepscan-row" class="deepscan-row hidden">
-        <input type="text" id="deepscan-classes" value="yoghurt, pen, spoon, phone, computer mouse" title="Comma-separated items to search for" />
+        <input type="text" id="deepscan-classes" value="cigarette pack, cracker box, glasses, yoghurt, pen" title="Comma-separated items to search for" />
         <button id="deepscan-btn" class="secondary-btn">🔍 Deep scan</button>
       </div>
 
       <div id="hand-analysis" class="hand-analysis hidden">
         <div class="hand-count"><span id="finger-total">0</span> finger<span id="finger-plural">s</span> up</div>
         <ul id="hand-details"></ul>
+      </div>
+
+      <div id="quick-labels" class="quick-labels hidden">
+        <div class="quick-head">
+          <span class="muted small">Quick labels — click to apply to the selected box</span>
+          <button id="edit-classes-btn" class="link-btn" title="Edit your project classes">edit</button>
+        </div>
+        <div id="quick-label-buttons" class="quick-label-buttons"></div>
       </div>
 
       <div id="summary" class="summary">
