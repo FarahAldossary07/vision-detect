@@ -1,5 +1,6 @@
 import {
   FaceDetector,
+  HandLandmarker,
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
@@ -7,6 +8,8 @@ const MEDIAPIPE_WASM =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 const FACE_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+const HAND_MODEL =
+  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 const PALETTE = [
   "#3fb6ff", "#7ee787", "#ffa657", "#ff7b72", "#d2a8ff",
@@ -38,6 +41,14 @@ const els = {
   confSlider: document.getElementById("conf-slider"),
   confValue: document.getElementById("conf-value"),
   faceToggle: document.getElementById("face-toggle"),
+  handToggle: document.getElementById("hand-toggle"),
+  handAnalysis: document.getElementById("hand-analysis"),
+  fingerTotal: document.getElementById("finger-total"),
+  fingerPlural: document.getElementById("finger-plural"),
+  handDetails: document.getElementById("hand-details"),
+  deepscanRow: document.getElementById("deepscan-row"),
+  deepscanClasses: document.getElementById("deepscan-classes"),
+  deepscanBtn: document.getElementById("deepscan-btn"),
   stopBtn: document.getElementById("stop-btn"),
   reviewHint: document.getElementById("review-hint"),
   resultsTitle: document.getElementById("results-title"),
@@ -59,9 +70,13 @@ const state = {
   objectModel: null,
   faceDetector: null,
   faceMode: null,
+  handLandmarker: null,
+  handMode: null,
+  zeroShot: null, // lazy-loaded open-vocabulary detector
   stream: null,
   running: false, // live camera loop
   liveDetections: [],
+  liveHands: [],
   // Review = a captured/uploaded still being labeled.
   // { image: CanvasImageSource, width, height, source, annotations: [...], selected }
   review: null,
@@ -86,12 +101,21 @@ async function loadModels() {
       FilesetResolver.forVisionTasks(MEDIAPIPE_WASM),
     ]);
     state.objectModel = objectModel;
-    state.faceDetector = await FaceDetector.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: FACE_MODEL, delegate: "GPU" },
-      runningMode: "IMAGE",
-      minDetectionConfidence: 0.4,
-    });
+    [state.faceDetector, state.handLandmarker] = await Promise.all([
+      FaceDetector.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: FACE_MODEL, delegate: "GPU" },
+        runningMode: "IMAGE",
+        minDetectionConfidence: 0.4,
+      }),
+      HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: HAND_MODEL, delegate: "GPU" },
+        runningMode: "IMAGE",
+        numHands: 2,
+        minHandDetectionConfidence: 0.4,
+      }),
+    ]);
     state.faceMode = "IMAGE";
+    state.handMode = "IMAGE";
     setStatus("ready", "Models ready");
     els.startBtn.disabled = false;
     els.placeholderText.textContent =
@@ -143,6 +167,156 @@ async function detectFacesImage(source) {
 async function detectFacesVideo(video, ts) {
   await ensureFaceMode("VIDEO");
   return mapFaces(state.faceDetector.detectForVideo(video, ts));
+}
+
+// ---------- Hand & finger analysis ----------
+
+async function ensureHandMode(mode) {
+  if (state.handMode !== mode) {
+    await state.handLandmarker.setOptions({ runningMode: mode });
+    state.handMode = mode;
+  }
+}
+
+const FINGER_JOINTS = [
+  { name: "thumb", tip: 4, mid: 3, base: 2 },
+  { name: "index", tip: 8, mid: 6, base: 5 },
+  { name: "middle", tip: 12, mid: 10, base: 9 },
+  { name: "ring", tip: 16, mid: 14, base: 13 },
+  { name: "pinky", tip: 20, mid: 18, base: 17 },
+];
+
+function dist2d(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function angleAt(b, a, c) {
+  const v1 = { x: a.x - b.x, y: a.y - b.y };
+  const v2 = { x: c.x - b.x, y: c.y - b.y };
+  const dot = v1.x * v2.x + v1.y * v2.y;
+  const mag = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y);
+  if (mag === 0) return 0;
+  return (Math.acos(Math.max(-1, Math.min(1, dot / mag))) * 180) / Math.PI;
+}
+
+function analyzeHand(landmarks, handedness) {
+  const wrist = landmarks[0];
+  const raised = [];
+  for (const f of FINGER_JOINTS) {
+    const tip = landmarks[f.tip];
+    const mid = landmarks[f.mid];
+    const base = landmarks[f.base];
+    const straight = angleAt(mid, base, tip);
+    let up;
+    if (f.name === "thumb") {
+      // Thumb: straight joint chain AND tip clearly away from the palm (pinky base).
+      up = straight > 150 && dist2d(tip, landmarks[17]) > dist2d(base, landmarks[17]) * 1.1;
+    } else {
+      up = straight > 155 && dist2d(tip, wrist) > dist2d(mid, wrist);
+    }
+    if (up) raised.push(f.name);
+  }
+  const xs = landmarks.map((p) => p.x);
+  const ys = landmarks.map((p) => p.y);
+  return {
+    handedness,
+    raised,
+    count: raised.length,
+    // normalized bbox
+    box: [Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)],
+    landmarks,
+  };
+}
+
+function mapHands(result) {
+  const hands = [];
+  (result?.landmarks ?? []).forEach((lm, i) => {
+    const handed =
+      result.handednesses?.[i]?.[0]?.categoryName ??
+      result.handedness?.[i]?.[0]?.categoryName ??
+      "Hand";
+    hands.push(analyzeHand(lm, handed));
+  });
+  return hands;
+}
+
+async function detectHandsImage(source) {
+  await ensureHandMode("IMAGE");
+  return mapHands(state.handLandmarker.detect(source));
+}
+
+async function detectHandsVideo(video, ts) {
+  await ensureHandMode("VIDEO");
+  return mapHands(state.handLandmarker.detectForVideo(video, ts));
+}
+
+const HAND_BONES = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16],
+  [13, 17], [17, 18], [18, 19], [19, 20],
+  [0, 17],
+];
+
+function drawHands(hands) {
+  const W = els.canvas.width;
+  const H = els.canvas.height;
+  const scale = Math.max(W / 640, 1);
+  ctx.lineWidth = 1.5 * scale;
+  const fontSize = 13 * scale;
+  ctx.font = `600 ${fontSize}px -apple-system, sans-serif`;
+  ctx.textBaseline = "top";
+
+  for (const h of hands) {
+    ctx.strokeStyle = "rgba(126, 231, 135, 0.9)";
+    for (const [a, b] of HAND_BONES) {
+      ctx.beginPath();
+      ctx.moveTo(h.landmarks[a].x * W, h.landmarks[a].y * H);
+      ctx.lineTo(h.landmarks[b].x * W, h.landmarks[b].y * H);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#7ee787";
+    for (const p of h.landmarks) {
+      ctx.beginPath();
+      ctx.arc(p.x * W, p.y * H, 2.5 * scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const [bx, by, bw, bh] = h.box;
+    const x = bx * W;
+    const y = by * H;
+    ctx.strokeStyle = "#7ee787";
+    ctx.setLineDash([6 * scale, 4 * scale]);
+    ctx.strokeRect(x, y, bw * W, bh * H);
+    ctx.setLineDash([]);
+    const text = `${h.handedness} · ${h.count} up${h.count ? ": " + h.raised.join(", ") : ""}`;
+    const tw = ctx.measureText(text).width;
+    const th = fontSize * 1.35;
+    const ty = y - th < 0 ? y + bh * H + 2 : y - th;
+    ctx.fillStyle = "#7ee787";
+    ctx.fillRect(x, ty, tw + 10 * scale, th);
+    ctx.fillStyle = "#0d1117";
+    ctx.fillText(text, x + 4 * scale, ty + fontSize * 0.18);
+  }
+}
+
+function renderHandPanel(hands) {
+  if (!hands.length || !els.handToggle.checked) {
+    els.handAnalysis.classList.add("hidden");
+    return;
+  }
+  els.handAnalysis.classList.remove("hidden");
+  const total = hands.reduce((n, h) => n + h.count, 0);
+  els.fingerTotal.textContent = total;
+  els.fingerPlural.textContent = total === 1 ? "" : "s";
+  els.handDetails.innerHTML = hands
+    .map(
+      (h) =>
+        `<li><b>${h.handedness} hand</b>: ${h.count} finger${h.count === 1 ? "" : "s"} up${
+          h.count ? " — <b>" + h.raised.join(", ") + "</b>" : " (fist)"
+        }</li>`
+    )
+    .join("");
 }
 
 // ---------- Drawing ----------
@@ -220,13 +394,17 @@ async function startWebcam() {
     if (ts - lastDetect >= DETECT_EVERY_MS) {
       lastDetect = ts;
       try {
-        const [objects, faces] = await Promise.all([
+        const [objects, faces, hands] = await Promise.all([
           detectObjects(els.video),
           els.faceToggle.checked
             ? detectFacesVideo(els.video, ts)
             : Promise.resolve([]),
+          els.handToggle.checked
+            ? detectHandsVideo(els.video, ts)
+            : Promise.resolve([]),
         ]);
         state.liveDetections = [...objects, ...faces];
+        state.liveHands = hands;
       } catch (err) {
         console.error("Detection error:", err);
       }
@@ -234,7 +412,9 @@ async function startWebcam() {
 
     const visible = visibleLive();
     drawBoxes(visible);
+    if (els.handToggle.checked) drawHands(state.liveHands);
     renderLivePanel(visible);
+    renderHandPanel(state.liveHands);
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
@@ -308,6 +488,7 @@ async function enterReview(imageSource, sourceName) {
   els.canvas.classList.remove("hidden");
   els.canvas.classList.add("labeling");
   els.reviewActions.classList.remove("hidden");
+  els.deepscanRow.classList.remove("hidden");
   els.reviewHint.classList.remove("hidden");
   els.resultsTitle.textContent = "Labels";
   ctx.drawImage(imageSource, 0, 0);
@@ -318,17 +499,20 @@ async function enterReview(imageSource, sourceName) {
     height,
     source: sourceName,
     annotations: [],
+    hands: [],
     selected: -1,
   };
 
   // Seed with model suggestions (filtered by current threshold).
   try {
-    const [objects, faces] = await Promise.all([
+    const [objects, faces, hands] = await Promise.all([
       detectObjects(imageSource),
       els.faceToggle.checked ? detectFacesImage(imageSource) : Promise.resolve([]),
+      els.handToggle.checked ? detectHandsImage(imageSource) : Promise.resolve([]),
     ]);
     const t = threshold();
     state.review.annotations = [...objects, ...faces].filter((d) => d.score >= t);
+    state.review.hands = hands;
   } catch (err) {
     console.error("Detection error:", err);
   }
@@ -340,7 +524,9 @@ function exitReview() {
   state.drawing = null;
   els.canvas.classList.remove("labeling");
   els.reviewActions.classList.add("hidden");
+  els.deepscanRow.classList.add("hidden");
   els.reviewHint.classList.add("hidden");
+  els.handAnalysis.classList.add("hidden");
   els.resultsTitle.textContent = "Detections";
 }
 
@@ -349,6 +535,8 @@ function renderReview() {
   if (!r) return;
   ctx.drawImage(r.image, 0, 0);
   drawBoxes(r.annotations, r.selected);
+  if (els.handToggle.checked && r.hands?.length) drawHands(r.hands);
+  renderHandPanel(r.hands ?? []);
   if (state.drawing) {
     const { x0, y0, x1, y1 } = state.drawing;
     ctx.strokeStyle = "#ffffff";
@@ -510,6 +698,7 @@ function renderReviewCanvasOnly() {
   const r = state.review;
   ctx.drawImage(r.image, 0, 0);
   drawBoxes(r.annotations, r.selected);
+  if (els.handToggle.checked && r.hands?.length) drawHands(r.hands);
   if (state.drawing) {
     const { x0, y0, x1, y1 } = state.drawing;
     ctx.strokeStyle = "#ffffff";
@@ -672,6 +861,85 @@ async function exportDatasetZip() {
   }
 }
 
+// ---------- Deep scan (open-vocabulary detection) ----------
+
+async function deepScan() {
+  const r = state.review;
+  if (!r) return;
+  const labels = els.deepscanClasses.value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!labels.length) return;
+
+  els.deepscanBtn.disabled = true;
+  try {
+    if (!state.zeroShot) {
+      els.deepscanBtn.textContent = "⏳ Downloading model…";
+      const { pipeline } = await import(
+        "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm"
+      );
+      state.zeroShot = await pipeline(
+        "zero-shot-object-detection",
+        "Xenova/owlvit-base-patch32"
+      );
+    }
+    els.deepscanBtn.textContent = "🔍 Scanning…";
+
+    // Downscale for speed; OWL-ViT works at low resolution anyway.
+    const MAX = 960;
+    const s = Math.min(1, MAX / Math.max(r.width, r.height));
+    const scanCanvas = document.createElement("canvas");
+    scanCanvas.width = Math.round(r.width * s);
+    scanCanvas.height = Math.round(r.height * s);
+    scanCanvas.getContext("2d").drawImage(r.image, 0, 0, scanCanvas.width, scanCanvas.height);
+
+    // The quantized in-browser model scores conservatively (a correct hit often
+    // lands near 0.07), so keep the cut-off low and cap the count instead.
+    const results = (
+      await state.zeroShot(scanCanvas.toDataURL("image/jpeg", 0.9), labels, {
+        threshold: 0.04,
+      })
+    )
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12);
+
+    let added = 0;
+    for (const hit of results) {
+      const x = hit.box.xmin / s;
+      const y = hit.box.ymin / s;
+      const w = (hit.box.xmax - hit.box.xmin) / s;
+      const h = (hit.box.ymax - hit.box.ymin) / s;
+      // Skip near-duplicates of existing boxes (same label, heavy overlap).
+      const dup = r.annotations.some((a) => {
+        const [ax, ay, aw, ah] = a.bbox;
+        const ix = Math.max(0, Math.min(x + w, ax + aw) - Math.max(x, ax));
+        const iy = Math.max(0, Math.min(y + h, ay + ah) - Math.max(y, ay));
+        const inter = ix * iy;
+        return a.label === hit.label && inter / (w * h + aw * ah - inter) > 0.5;
+      });
+      if (dup) continue;
+      r.annotations.push({
+        label: hit.label,
+        score: hit.score,
+        bbox: [Math.round(x), Math.round(y), Math.round(w), Math.round(h)],
+        type: "deepscan",
+      });
+      added++;
+    }
+    renderReview();
+    els.deepscanBtn.textContent = added
+      ? `✅ Found ${added}`
+      : "🔍 Nothing found";
+  } catch (err) {
+    console.error("Deep scan failed:", err);
+    els.deepscanBtn.textContent = "⚠️ Scan failed";
+  } finally {
+    els.deepscanBtn.disabled = false;
+    setTimeout(() => (els.deepscanBtn.textContent = "🔍 Deep scan"), 2500);
+  }
+}
+
 // ---------- Upload mode ----------
 
 async function handleFile(file) {
@@ -737,12 +1005,22 @@ function retake() {
 
 function exportJSON() {
   const detections = state.review ? state.review.annotations : visibleLive();
+  const hands = state.review ? state.review.hands ?? [] : state.liveHands;
   const payload = {
     tool: "Vision Detect",
     source: state.review?.source ?? "webcam-live",
     exported_at: new Date().toISOString(),
     image_size: { width: els.canvas.width, height: els.canvas.height },
     total_detections: detections.length,
+    hand_analysis: {
+      hands_detected: hands.length,
+      total_fingers_up: hands.reduce((n, h) => n + h.count, 0),
+      hands: hands.map((h) => ({
+        handedness: h.handedness,
+        fingers_up: h.count,
+        raised_fingers: h.raised,
+      })),
+    },
     counts_by_class: Object.fromEntries(
       detections.reduce(
         (m, d) => m.set(d.label || "unlabeled", (m.get(d.label || "unlabeled") ?? 0) + 1),
@@ -781,6 +1059,11 @@ els.exportBtn.addEventListener("click", exportJSON);
 els.saveBtn.addEventListener("click", saveToDataset);
 els.retakeBtn.addEventListener("click", retake);
 els.exportDatasetBtn.addEventListener("click", exportDatasetZip);
+els.deepscanBtn.addEventListener("click", deepScan);
+els.handToggle.addEventListener("change", () => {
+  if (state.review) renderReview();
+  else els.handAnalysis.classList.add("hidden");
+});
 els.clearDatasetBtn.addEventListener("click", async () => {
   if (confirm("Delete all saved images and labels from this browser?")) {
     await dbClear();

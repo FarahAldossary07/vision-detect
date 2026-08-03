@@ -28,9 +28,17 @@ The 🖼️ Upload tab does the same for existing image files.
   dataset.json             ← full metadata (COCO-style manifest)
   ```
 
-## What the pretrained model suggests
+## Detection features
 
-Faces (MediaPipe BlazeFace) plus the **80 COCO classes** (cell phone, mouse, keyboard, laptop, bottle, cup, book, scissors, person, …). Anything outside that vocabulary is labeled manually — that's the point: the exported dataset is exactly what's needed to **train a custom detector** (e.g. YOLOv8 fine-tune) that recognizes your specific items directly. That training step is the natural next phase of this project.
+**Auto-detected, live and on captures:**
+
+- **Objects** — 80 COCO classes including *spoon, computer mouse, cell phone, keyboard, laptop, bottle, cup, book, scissors, person*
+- **Faces** — MediaPipe BlazeFace
+- **Hands & fingers** — MediaPipe HandLandmarker with per-finger analysis: how many fingers are up (1, 2, 3…) **and which ones** (thumb / index / middle / ring / pinky), per hand, with handedness. Skeleton overlay on the video, structured summary in the sidebar, and included in the JSON export.
+
+**🔍 Deep scan (experimental, on captured photos):** type any item names — e.g. `yoghurt, pen` — and an open-vocabulary model (OWL-ViT, running in-browser) searches the image for them. First use downloads ~100 MB (cached afterwards). Useful as a labeling assistant, but the quantized browser model scores conservatively and misses more than a trained model would — treat its suggestions as hints to accept or delete, not ground truth.
+
+**Everything else is labeled manually** — and that's the point: the exported dataset is exactly what's needed to **train a custom detector** (e.g. a YOLO fine-tune) that recognizes yoghurt pots, pens, or specific products reliably. That training step is the natural next phase of this project.
 
 ## Tech stack
 
@@ -38,6 +46,8 @@ Faces (MediaPipe BlazeFace) plus the **80 COCO classes** (cell phone, mouse, key
 |---|---|
 | Object detection | TensorFlow.js + COCO-SSD (in-browser, WebGL) |
 | Face detection | MediaPipe Tasks Vision (BlazeFace) |
+| Hand & finger analysis | MediaPipe HandLandmarker (21 landmarks/hand) |
+| Open-vocabulary search | Transformers.js + OWL-ViT (lazy-loaded) |
 | Labeling & dataset | Canvas pointer interactions + IndexedDB + JSZip |
 | Frontend | Vanilla HTML/CSS/JS — zero build step |
 | Hosting | Vercel (static) |

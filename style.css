@@ -295,6 +295,39 @@ video, canvas { max-width: 100%; max-height: 100%; }
 .review-actions { display: flex; gap: 0.6rem; }
 .review-actions .primary-btn { flex: 1; padding: 0.55rem 0.8rem; font-size: 0.88rem; }
 
+.deepscan-row { display: flex; gap: 0.5rem; }
+.deepscan-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.82rem;
+  padding: 0.45rem 0.6rem;
+}
+.deepscan-row input:focus { outline: 1px solid var(--accent); }
+.deepscan-row .secondary-btn { white-space: nowrap; }
+
+.hand-analysis {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.hand-count {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--accent-2);
+}
+.hand-count span:first-child { font-size: 1.5rem; }
+.hand-analysis ul { list-style: none; display: flex; flex-direction: column; gap: 0.25rem; }
+.hand-analysis li { font-size: 0.82rem; color: var(--muted); }
+.hand-analysis li b { color: var(--text); }
+
 .dataset-box {
   background: var(--panel-2);
   border: 1px solid var(--border);
